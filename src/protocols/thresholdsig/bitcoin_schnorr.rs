@@ -20,6 +20,7 @@ use Error::{self, InvalidKey, InvalidSS, InvalidSig};
 
 use curv::arithmetic::traits::*;
 
+use curv::elliptic::curves::secp256_k1::{Secp256k1Scalar, PK};
 use curv::elliptic::curves::traits::*;
 
 use curv::cryptographic_primitives::commitments::hash_commitment::HashCommitment;
@@ -281,22 +282,93 @@ impl Signature {
     }
 
     pub fn verify(&self, message: &[u8], pubkey_y: &GE) -> Result<(), Error> {
+        let v = self.v.bytes_compressed_to_big_int().to_bytes();
+        let y = self.v.bytes_compressed_to_big_int().to_bytes();
+        println!("v_len: {}, y_len: {}, v: {:?}, y: {:?}",v.len(), y.len(), v, y);
         let e_bn = HSha256::create_hash(&[
             &self.v.bytes_compressed_to_big_int(),
             &pubkey_y.bytes_compressed_to_big_int(),
             &BigInt::from_bytes(message),
         ]);
         let e: FE = ECScalar::from(&e_bn);
-
-        let g: GE = GE::generator();
-        let sigma_g = g * &self.sigma;
         let e_y = pubkey_y * &e;
         let e_y_plus_v = e_y + &self.v;
 
+        let g: GE = GE::generator();
+        let sigma_g = g * &self.sigma;
+
+        // R + H(R,X,m) * X = s * G
         if e_y_plus_v == sigma_g {
             Ok(())
         } else {
             Err(InvalidSig)
         }
     }
+
+}
+
+#[derive(Clone, Serialize, Deserialize, )]
+pub struct SigEx {
+    pub signature: Signature,
+}
+
+impl From<Signature> for SigEx {
+    fn from(value: Signature) -> Self {
+        SigEx { signature: value }
+    }
+}
+
+impl SigEx {
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = [0u8; 65];
+        let s = self.signature.sigma.to_big_int().to_bytes();
+        let v = self.signature.v.bytes_compressed_to_big_int().to_bytes();
+        bytes[..32].copy_from_slice(&s);
+        bytes[32..].copy_from_slice(&v);
+        bytes.to_vec()
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
+        if bytes.len() != 65 {
+            return Err("invalid signature length".into());
+        }
+        let bigint = BigInt::from_bytes(&bytes[..32]);
+        let sigma: FE = ECScalar::from(&bigint);
+        let pk = PK::from_slice(&bytes[32..]).unwrap().serialize_uncompressed();
+        let x = BigInt::from_bytes(&pk[1..33]);
+        let y = BigInt::from_bytes(&pk[33..]);
+        let v = GE::from_coor(&x, &y);
+        let signature = Signature { sigma, v };
+        Ok(SigEx { signature })
+    }
+}
+
+use libsecp256k1::curve::{Scalar, Affine, Jacobian};
+use libsecp256k1::{PublicKey as ECPK, SecretKey as ECSK, Signature as ECSig, PublicKeyFormat};
+use libsecp256k1::{ECMULT_GEN_CONTEXT,ECMULT_CONTEXT};
+
+// H(R, X, m)
+fn hash() -> Scalar {
+    Scalar::default()
+}
+pub fn verify(message: &[u8], pubkey: &[u8], signature: &[u8]) -> bool {
+    if signature.len() != 65 {
+        return false;
+    }
+    let R:ECSK = ECSK::parse_slice(&signature[..32]).unwrap();
+    let V:ECPK = ECPK::parse_slice(&signature[32..], Some(PublicKeyFormat::Compressed)).unwrap();
+    let Pk: ECPK = ECPK::parse_slice(pubkey, Some(PublicKeyFormat::Compressed)).unwrap();
+
+    let e = hash();
+    let mut e_y_j = Jacobian::default();
+    ECMULT_CONTEXT.ecmult_const(&mut e_y_j, &Pk.into(), &e);
+
+    let e_y_plus_v = e_y + V.into();
+
+    let mut g_j_s = Jacobian::default();
+    ECMULT_GEN_CONTEXT.ecmult_gen(&mut g_j_s, &R.into());
+    let mut g_s: Affine = Affine::default();
+    g_s.set_gej(&g_j_s);
+
+    return e_y_plus_v == g_s
 }

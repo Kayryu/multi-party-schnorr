@@ -1,4 +1,6 @@
 #![allow(non_snake_case)]
+use curv::BigInt;
+use curv::arithmetic::Converter;
 /*
     Multisig Schnorr
 
@@ -18,7 +20,10 @@ use curv::cryptographic_primitives::secret_sharing::feldman_vss::VerifiableSS;
 
 use curv::elliptic::curves::secp256_k1::FE;
 use curv::elliptic::curves::secp256_k1::GE;
+use curv::elliptic::curves::secp256_k1::PK;
+use curv::elliptic::curves::traits::ECPoint;
 use protocols::thresholdsig::bitcoin_schnorr::*;
+use libsecp256k1::{PublicKey as ECPK, SecretKey as ECSK, Signature as ECSig};
 
 #[test]
 #[allow(unused_doc_comments)]
@@ -40,7 +45,7 @@ fn test_t2_n4() {
 
     let (_eph_keys_vec, eph_shared_keys_vec, V, eph_vss_vec) =
         keygen_t_n_parties(t.clone(), n.clone(), &parties_points_vec);
-    let message: [u8; 4] = [79, 77, 69, 82];
+    let message: [u8; 46] = [79; 46];
     let local_sig_vec = (0..n.clone())
         .map(|i| LocalSig::compute(&message, &eph_shared_keys_vec[i], &priv_shared_keys_vec[i]))
         .collect::<Vec<LocalSig>>();
@@ -56,6 +61,25 @@ fn test_t2_n4() {
     let signature = Signature::generate(&vss_sum_local_sigs, &local_sig_vec, &parties_index_vec, V);
     let verify_sig = signature.verify(&message, &Y);
     assert!(verify_sig.is_ok());
+
+    let vb = signature.v.get_element().serialize();
+    let pk = PK::from_slice(&vb).unwrap().serialize_uncompressed();
+    
+    let x = BigInt::from_bytes(&pk[1..33]);
+    let y = BigInt::from_bytes(&pk[33..]);
+    let v = GE::from_coor(&x, &y);
+    println!("v: {:?}", v);
+    let s_bytes = SigEx::from(signature).to_bytes();
+    println!("signature bytes len: {}, data: {:?}", s_bytes.len(), s_bytes);
+    let sig = SigEx::from_bytes(&s_bytes).unwrap();
+
+    let verify_sig = sig.signature.verify(&message, &Y);
+    assert!(verify_sig.is_ok());
+
+    // use secp256k1 crate to verify the schnorr signature.
+    let ec_pk = ECPK::parse_compressed(&vb).unwrap();
+    let ec_sig = ECSig::parse_standard_slice(&s_bytes[..64]).unwrap();
+
 }
 
 #[test]
@@ -79,7 +103,7 @@ fn test_t2_n5_sign_with_4() {
     let num_parties = parties_index_vec.len();
     let (_eph_keys_vec, eph_shared_keys_vec, V, eph_vss_vec) =
         keygen_t_n_parties(t.clone(), num_parties.clone(), &parties_points_vec);
-    let message: [u8; 4] = [79, 77, 69, 82];
+    let message: [u8; 678] = [79u8 ; 678];
 
     // each party computes and share a local sig, we collected them here to a vector as each party should do AFTER receiving all local sigs
     let local_sig_vec = (0..num_parties.clone())
@@ -106,6 +130,9 @@ fn test_t2_n5_sign_with_4() {
     let signature = Signature::generate(&vss_sum_local_sigs, &local_sig_vec, &parties_index_vec, V);
     let verify_sig = signature.verify(&message, &Y);
     assert!(verify_sig.is_ok());
+
+    // use schnorrkel to verify
+    // let signature = schnorrkel::Signature::from_bytes(signature).unwrap();
 }
 
 #[allow(dead_code)]
