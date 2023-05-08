@@ -283,7 +283,7 @@ impl Signature {
 
     pub fn verify(&self, message: &[u8], pubkey_y: &GE) -> Result<(), Error> {
         let v = self.v.bytes_compressed_to_big_int().to_bytes();
-        let y = self.v.bytes_compressed_to_big_int().to_bytes();
+        let y = pubkey_y.bytes_compressed_to_big_int().to_bytes();
         println!("v_len: {}, y_len: {}, v: {:?}, y: {:?}",v.len(), y.len(), v, y);
         let e_bn = HSha256::create_hash(&[
             &self.v.bytes_compressed_to_big_int(),
@@ -346,11 +346,25 @@ impl SigEx {
 use libsecp256k1::curve::{Scalar, Affine, Jacobian};
 use libsecp256k1::{PublicKey as ECPK, SecretKey as ECSK, Signature as ECSig, PublicKeyFormat};
 use libsecp256k1::{ECMULT_GEN_CONTEXT,ECMULT_CONTEXT};
+use sha2::{Sha256, Digest};
 
 // H(R, X, m)
-fn hash() -> Scalar {
-    Scalar::default()
+fn hash(R: &[u8], X: &[u8], m: &[u8]) -> Scalar {
+    let mut hasher = Sha256::new();
+
+    hasher.update(R);
+    hasher.update(X);
+    hasher.update(m);
+
+    let result_hex = hasher.finalize();
+    
+    let mut bin = [0u8; 32];
+    bin.copy_from_slice(&result_hex[..]);
+    let mut h = Scalar::default();
+    h.set_b32(&bin);
+    h
 }
+
 pub fn verify(message: &[u8], pubkey: &[u8], signature: &[u8]) -> bool {
     if signature.len() != 65 {
         return false;
@@ -359,16 +373,17 @@ pub fn verify(message: &[u8], pubkey: &[u8], signature: &[u8]) -> bool {
     let V:ECPK = ECPK::parse_slice(&signature[32..], Some(PublicKeyFormat::Compressed)).unwrap();
     let Pk: ECPK = ECPK::parse_slice(pubkey, Some(PublicKeyFormat::Compressed)).unwrap();
 
-    let e = hash();
+    let e = hash(&V.serialize_compressed(), &Pk.serialize_compressed(), message);
     let mut e_y_j = Jacobian::default();
     ECMULT_CONTEXT.ecmult_const(&mut e_y_j, &Pk.into(), &e);
 
-    let e_y_plus_v = e_y + V.into();
+    let e_y_plus_v_j = e_y_j.add_ge(&V.into());
 
     let mut g_j_s = Jacobian::default();
     ECMULT_GEN_CONTEXT.ecmult_gen(&mut g_j_s, &R.into());
-    let mut g_s: Affine = Affine::default();
-    g_s.set_gej(&g_j_s);
+
+    let g_s = Affine::from_gej(&g_j_s);
+    let e_y_plus_v: Affine = Affine::from_gej(&e_y_plus_v_j);
 
     return e_y_plus_v == g_s
 }

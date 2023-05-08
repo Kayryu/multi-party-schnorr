@@ -80,6 +80,24 @@ fn test_t2_n4() {
     let ec_pk = ECPK::parse_compressed(&vb).unwrap();
     let ec_sig = ECSig::parse_standard_slice(&s_bytes[..64]).unwrap();
 
+    // use invalid message should 
+    let invalid_message:[u8; 46] = [22; 46];
+    let vr = verify(&invalid_message, &Y.bytes_compressed_to_big_int().to_bytes(), &s_bytes);
+    assert!(!vr);
+
+    // use invalid public should failed.
+    let vr = verify(&message, &V.bytes_compressed_to_big_int().to_bytes(), &s_bytes);
+    assert!(!vr);
+
+    // use invalid signature should failed.
+    let mut invalid_sig = s_bytes.clone();
+    invalid_sig[0] = 44;
+    let vr = verify(&message, &Y.bytes_compressed_to_big_int().to_bytes(), &invalid_sig);
+    assert!(!vr);
+
+    // should success
+    let vr = verify(&message, &Y.bytes_compressed_to_big_int().to_bytes(), &s_bytes);
+    assert!(vr);
 }
 
 #[test]
