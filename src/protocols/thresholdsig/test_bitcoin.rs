@@ -1,4 +1,6 @@
 #![allow(non_snake_case)]
+use std::convert::TryFrom;
+
 use curv::BigInt;
 use curv::arithmetic::Converter;
 /*
@@ -29,6 +31,41 @@ use secp::Message;
 use secp::Secp256k1;
 use secp::XOnlyPublicKey;
 use secp::schnorr::Signature as SCSig;
+use sha2::Digest;
+use sha2::Sha256;
+
+fn sha256(m: &[u8]) -> Vec<u8> {
+    let mut hasher = Sha256::new();
+
+    hasher.update(m);
+    let result_hex = hasher.finalize();
+    
+    let mut bin = [0u8; 32];
+    bin.copy_from_slice(&result_hex[..]);
+    bin.to_vec()
+}
+
+#[test]
+fn verify_schnorr_signature() {
+    let signature = "006b172e13f18f0525565396879818e5464f50f5b6429dc58365b7b38327f475c2e9e65bebdf64cb265243ca158d60179b608eb71f7031a54f2a07106ba1ba33";
+    let msg = "4d380935db8cb8ee212744e280e79e7df5199302931c6a3a83b32606805c62cb";
+    let pubkey = "58a0f986d1cc5187e8bf8ecfbde7c57a14c9dfee83749e01fa60ac4a31430b63";
+
+    let rs = sha256("BIP0340/challenge".as_bytes());
+    println!("rs: {:?}\n{}", rs.clone(), hex::encode(rs));
+
+    let signature = hex::decode(signature).unwrap();
+    let msg = hex::decode(msg).unwrap();
+    let pubkey = hex::decode(pubkey).unwrap();
+    let verifier = Secp256k1::new();
+    verifier.verify_schnorr(&SCSig::from_slice(&signature).unwrap(),
+        &Message::from_slice(&msg).unwrap(), 
+        &XOnlyPublicKey::from_slice(&pubkey).unwrap()).unwrap();
+
+    let vr = verify_schnorr(&msg, &pubkey, &signature);
+    println!("vr: {vr}");
+    assert!(vr);
+}
 
 #[test]
 #[allow(unused_doc_comments)]
@@ -50,7 +87,7 @@ fn test_t2_n4() {
 
     let (_eph_keys_vec, eph_shared_keys_vec, V, eph_vss_vec) =
         keygen_t_n_parties(t.clone(), n.clone(), &parties_points_vec);
-    let message: [u8; 46] = [79; 46];
+    let message: [u8; 32] = [79; 32];
     let local_sig_vec = (0..n.clone())
         .map(|i| LocalSig::compute(&message, &eph_shared_keys_vec[i], &priv_shared_keys_vec[i]))
         .collect::<Vec<LocalSig>>();
@@ -64,8 +101,8 @@ fn test_t2_n4() {
     assert!(verify_local_sig.is_ok());
     let vss_sum_local_sigs = verify_local_sig.unwrap();
     let signature = Signature::generate(&vss_sum_local_sigs, &local_sig_vec, &parties_index_vec, V);
-
-
+    let verify_sig = signature.verify(&message, &Y);
+    assert!(verify_sig.is_ok());
 
 
     // convert to SCSig
@@ -86,11 +123,6 @@ fn test_t2_n4() {
         &XOnlyPublicKey::from_slice(&Y.x_coor().unwrap().to_bytes()).unwrap()).unwrap();
 
 
-
-
-
-    let verify_sig = signature.verify(&message, &Y);
-    assert!(verify_sig.is_ok());
 
     let vb = signature.v.get_element().serialize();
     let pk = PK::from_slice(&vb).unwrap().serialize_uncompressed();

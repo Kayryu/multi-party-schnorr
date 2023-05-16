@@ -24,6 +24,8 @@ extern crate schnorrkel;
 extern crate libsecp256k1;
 extern crate sha2;
 extern crate secp;
+#[macro_use]
+extern crate arrayref;
 
 pub mod protocols;
 

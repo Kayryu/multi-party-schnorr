@@ -1,4 +1,7 @@
 #![allow(non_snake_case)]
+use std::convert::TryFrom;
+use std::ops::Neg;
+
 #[allow(unused_doc_comments)]
 /*
     Multisig Schnorr
@@ -354,8 +357,8 @@ impl SigEx {
     }
 }
 
-use libsecp256k1::curve::{Scalar, Affine, Jacobian};
-use libsecp256k1::{PublicKey as ECPK, SecretKey as ECSK, Signature as ECSig, PublicKeyFormat};
+use libsecp256k1::curve::{Scalar, Affine, Jacobian, Field};
+use libsecp256k1::{PublicKey as ECPK, SecretKey as ECSK, Signature as ECSig, PublicKeyFormat, Error as ECError};
 use libsecp256k1::{ECMULT_GEN_CONTEXT,ECMULT_CONTEXT};
 use sha2::{Sha256, Digest};
 
@@ -375,6 +378,87 @@ fn hash(R: &[u8], X: &[u8], m: &[u8]) -> Scalar {
     h.set_b32(&bin);
     h
 }
+
+// SHA256 (SHA256("BIP0340/challenge")||SHA256("BIP0340/challenge")||R.x||P.x||M)
+fn sha256_tagged(r_x: &[u8], p_x: &[u8], m: &[u8]) -> Scalar {
+    // SHA256("BIP0340/challenge")
+    const CHALLENGE_PREFIX: [u8; 32] = [123u8, 181, 45, 122, 159, 239, 88, 50, 62, 177, 191, 122, 64, 125, 179, 130, 210, 243, 242, 216, 27, 177, 34, 79, 73, 254, 81, 143, 109, 72, 211, 124];
+
+    let mut hasher = Sha256::new();
+
+    // add prefix
+    hasher.update(CHALLENGE_PREFIX);
+    hasher.update(CHALLENGE_PREFIX);
+
+    hasher.update(r_x);
+    hasher.update(p_x);
+    hasher.update(m);
+
+    let result_hex = hasher.finalize();
+    
+    let mut bin = [0u8; 32];
+    bin.copy_from_slice(&result_hex[..]);
+    let mut h = Scalar::default();
+    h.set_b32(&bin);
+    h
+}
+
+// https://github.com/bitcoin/bips/blob/master/bip-0340/test-vectors.csv
+
+
+pub fn load_xonly_pubkey(pubkey: &[u8]) -> Result<ECPK, ECError> {
+    if pubkey.len() != 32 {
+        return Err(ECError::InvalidPublicKey);
+    }
+    let mut x = Field::default();
+    if !x.set_b32(array_ref!(pubkey, 0, 32)) {
+        return Err(ECError::InvalidPublicKey);
+    }
+    let mut elem = Affine::default();
+    elem.set_xo_var(&x, false);
+    if elem.is_infinity() {
+        return Err(ECError::InvalidPublicKey);
+    }
+    if elem.is_valid_var() {
+        return ECPK::try_from(elem);
+    } else {
+        Err(ECError::InvalidPublicKey)
+    }
+}
+
+// https://github.com/joschisan/schnorr_secp256k1/blob/main/src/schnorr.rs#LL90C1-L90C1
+pub fn verify_schnorr(message: &[u8], pubkey: &[u8], signature: &[u8]) -> bool {
+    if signature.len() != 64 || message.len() != 32 || pubkey.len() != 32 {
+        return false;
+    }
+
+    let p: ECPK = load_xonly_pubkey(pubkey).unwrap();
+    let r:ECPK = load_xonly_pubkey(&signature[..32]).unwrap();
+    let s:ECSK = ECSK::parse_slice(&signature[32..]).unwrap();
+    
+    // compute e
+    let e = sha256_tagged(&signature[..32], &pubkey, message);
+
+    // Compute rj =  s*G + (-e)*pkj
+    let mut e_p_j = Jacobian::default();
+    let e = e.neg();
+    ECMULT_CONTEXT.ecmult_const(&mut e_p_j, &p.into(), &e);
+
+    let mut g_j_s = Jacobian::default();
+    ECMULT_GEN_CONTEXT.ecmult_gen(&mut g_j_s, &s.into());
+
+    let rj = e_p_j.add_var(&g_j_s, None);
+
+    let mut rx = Affine::from_gej(&rj);
+    if rx.is_infinity() {
+        return false;
+    }
+    rx.y.normalize_var();
+    let r: Affine = r.into();
+    return !rx.y.is_odd() && rx.x == r.x
+}
+
+
 
 pub fn verify(message: &[u8], pubkey: &[u8], signature: &[u8]) -> bool {
     if signature.len() != 65 {
