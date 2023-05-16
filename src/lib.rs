@@ -23,6 +23,7 @@ extern crate curv;
 extern crate schnorrkel;
 extern crate libsecp256k1;
 extern crate sha2;
+extern crate secp;
 
 pub mod protocols;
 

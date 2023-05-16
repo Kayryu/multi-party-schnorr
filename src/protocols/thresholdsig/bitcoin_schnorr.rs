@@ -305,6 +305,17 @@ impl Signature {
         }
     }
 
+    pub fn hash_message(&self, message: &[u8], pubkey_y: &GE) -> Result<BigInt, Error> {
+        let v = self.v.bytes_compressed_to_big_int().to_bytes();
+        let y = pubkey_y.bytes_compressed_to_big_int().to_bytes();
+        println!("v_len: {}, y_len: {}, v: {:?}, y: {:?}",v.len(), y.len(), v, y);
+        let e_bn = HSha256::create_hash(&[
+            &self.v.bytes_compressed_to_big_int(),
+            &pubkey_y.bytes_compressed_to_big_int(),
+            &BigInt::from_bytes(message),
+        ]);
+        Ok(e_bn)
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, )]
